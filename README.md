@@ -58,10 +58,13 @@ middleware-project/
 │   └── API.md              # API documentation
 ├── bap-service/
 │   └── server.js           # Standalone downstream BAP service
+├── acs-service/
+│   └── server.js           # Standalone downstream ACS service
 ├── tests/
 │   ├── unit.test.js        # Intent, language and config tests
 │   ├── api.test.js         # HTTP integration tests
-│   └── bap.test.js         # BAP service + integration/resilience tests
+│   ├── bap.test.js         # BAP service + integration/resilience tests
+│   └── acs.test.js         # ACS service + integration/resilience tests
 ├── .env.example            # Every setting, with defaults
 └── *.postman_collection.json # Manual exploration collections
 ```
@@ -277,6 +280,9 @@ configuration is never overridden by a stray local file.
 | `BAP_API_URL` | unset | BAP endpoint. Unset means mock responses. |
 | `USE_BAP_MOCK` | `false` | Set to `true` to force mocks even when `BAP_API_URL` is set. |
 | `BAP_TIMEOUT_MS` | `5000` | How long to wait for BAP before falling back to mocks. |
+| `ACS_API_URL` | unset | ACS endpoint. Unset means mock responses. |
+| `USE_ACS_MOCK` | `false` | Set to `true` to force mocks even when `ACS_API_URL` is set. |
+| `ACS_TIMEOUT_MS` | `5000` | How long to wait for ACS before falling back to mocks. |
 | `CORS_ORIGINS` | unset | Comma-separated origins allowed to call the API cross-origin. |
 
 The BAP service reads two of its own: `BAP_PORT` (default `4001`) and

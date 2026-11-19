@@ -16,7 +16,8 @@ async function detectIntent(query = "") {
   if (lowerCaseQuery.includes("recharge")) return "ACS_RECHARGE";
   // Allows up to 3 words between "lost" and "card" so phrasings like
   // "lost my debit card" / "lost my new credit card" are detected.
-  // Must stay in sync with handleQuery() in services/acsService.js.
+  // This is now the only place query text is matched — acsService dispatches
+  // on the resulting intent rather than re-matching the query itself.
   if (/lost\s+(\w+\s+){0,3}card/.test(lowerCaseQuery) ||
     lowerCaseQuery.includes("report lost") ||
     lowerCaseQuery.includes("block card") ||
@@ -61,15 +62,17 @@ async function handleIntent(sessionId, query) {
 
   try {
     switch (intent) {
-      // ---- ACS flows: use acsService.handleQuery(sessionId, query) ----
+      // ---- ACS flows: dispatched by intent, not by re-matching the query ----
       case "ACS_BALANCE":
       case "ACS_RECHARGE":
       case "ACS_REPORT_LOST_CARD":
       case "ACS_ACTIVATE_CARD":
       case "ACS_UPDATE_CONTACT":
       case "ACS_REPORT_SUSPICIOUS": {
-        // acsService.handleQuery should return { success, sessionId, data: { message } } or { success:false, error:... }
-        const svc = await acsService.handleQuery(sessionId, query);
+        // Pass the intent just detected. acsService used to re-run its own
+        // keyword matching over the raw query, duplicating detectIntent and
+        // silently drifting out of sync with it.
+        const svc = await acsService.handleQuery(sessionId, intent);
         if (!svc) {
           return { success: false, sessionId, error: "No response from ACS", meta: { intent } };
         }

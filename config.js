@@ -10,7 +10,15 @@ require('dotenv').config({ quiet: true });
 module.exports = {
   // Existing BAP API configuration - use mock if not available
   bapApiUrl: process.env.BAP_API_URL || null, // Set to null to use mock data
-  
+
+  // ACS (Account & Card Services) endpoint. Null means mock responses, same
+  // contract as BAP above.
+  acsApiUrl: process.env.ACS_API_URL || null,
+
+  // Forces mock ACS responses even when ACS_API_URL is set. Compared against
+  // the string 'true' because every env var is a string.
+  USE_ACS_MOCK: process.env.USE_ACS_MOCK === 'true',
+
   // New logging and server configuration
   LOG_FILE: process.env.LOG_FILE || './logs/middleware.log',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

@@ -13,7 +13,9 @@
     "logs:view:error": "tail -f logs/error-$(date +%Y-%m-%d).log",
     "logs:clear": "rm -rf logs/*.log && echo 'Logs cleared'",
     "bap": "node bap-service/server.js",
-    "dev:bap": "nodemon bap-service/server.js"
+    "dev:bap": "nodemon bap-service/server.js",
+    "acs": "node acs-service/server.js",
+    "dev:acs": "nodemon acs-service/server.js"
   },
   "keywords": [
     "ivr",

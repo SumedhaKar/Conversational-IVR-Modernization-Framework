@@ -1,165 +1,107 @@
-const delay = ms => new Promise(res => setTimeout(res, ms));
+const axios = require("axios");
+const config = require("../config");
+const { logger } = require('../middlewares/logger');
 
-async function startCall(sessionId, options = {}) {
-  await delay(100);
-  return { 
-    success: true, 
-    sessionId, 
-    action: 'startCall', 
-    message: `Mock: Call started for ${sessionId}`, 
-    acsCallId: `ACS-${Date.now()}` 
-  };
+// One HTTP client for every ACS operation, so timeout, logging and fallback
+// behaviour are identical across intents rather than reimplemented per call.
+const ACS_TIMEOUT_MS = Number(process.env.ACS_TIMEOUT_MS || 5000);
+
+// Used when ACS is unreachable or deliberately mocked. Keyed by the same
+// intent names handlers/intentHandler.js produces, so there is no translation
+// layer between detecting an intent and dispatching it.
+const FALLBACK_TEXT = {
+  ACS_BALANCE: "Your account balance is ₹500.",
+  ACS_RECHARGE: "Recharge successful for ₹100.",
+  ACS_REPORT_LOST_CARD:
+    "Thank you. Your card has been blocked immediately. A customer service agent will call you shortly to confirm.",
+  ACS_ACTIVATE_CARD:
+    "To activate your new card, please enter the 16-digit card number followed by the hash key.",
+  ACS_UPDATE_CONTACT:
+    "A secure link to update your contact details has been sent to your registered mobile number.",
+  ACS_REPORT_SUSPICIOUS:
+    "Thank you for reporting this. A temporary hold has been placed on your account. Our fraud protection team will contact you within the next hour.",
+  ACS_START_CALL: "Call started successfully (mocked).",
+  ACS_STOP_CALL: "Call stopped successfully (mocked).",
+  ACS_SEND_DTMF: "DTMF received (mocked)."
+};
+
+const fallback = (intent, sessionId, reason) => {
+  logger.info(`ACS ${intent} served from mock for session ${sessionId} (${reason})`);
+  return { sessionId, intent, responseText: FALLBACK_TEXT[intent], source: 'mock' };
+};
+
+/**
+ * Calls the ACS service for one intent.
+ *
+ * Mirrors bapService.callBap: any failure — no URL configured, mocks forced,
+ * network error, timeout, non-2xx, or a 2xx with no usable body — degrades to
+ * synthetic text rather than propagating, because a caller losing a card
+ * blocking request to a downstream outage is worse than a stale answer. The
+ * `source` field records which path produced the result.
+ */
+async function callAcs(intent, sessionId, params) {
+  if (!FALLBACK_TEXT[intent]) {
+    logger.warn(`ACS asked for unknown intent ${intent} on session ${sessionId}`);
+    return { sessionId, intent, success: false, error: { message: "Unable to map query to ACS action." } };
+  }
+
+  if (config.USE_ACS_MOCK) return fallback(intent, sessionId, 'USE_ACS_MOCK is set');
+  if (!config.acsApiUrl) return fallback(intent, sessionId, 'no ACS_API_URL configured');
+
+  try {
+    const response = await axios.post(
+      config.acsApiUrl,
+      { sessionId, intent, params },
+      { timeout: ACS_TIMEOUT_MS }
+    );
+
+    const body = response.data;
+    if (!body || !body.responseText) {
+      return fallback(intent, sessionId, 'ACS returned no responseText');
+    }
+
+    logger.info(`ACS ${intent} answered for session ${sessionId}`);
+    return { ...body, source: 'acs' };
+  } catch (error) {
+    const detail = error.response ? `HTTP ${error.response.status}` : error.code || error.message;
+    logger.warn(`ACS ${intent} failed for session ${sessionId}: ${detail}`);
+    return fallback(intent, sessionId, detail);
+  }
 }
 
-async function stopCall(sessionId) {
-  await delay(80);
-  return { 
-    success: true, 
-    sessionId, 
-    action: 'stopCall', 
-    message: `Mock: Call stopped for ${sessionId}` 
-  };
-}
-
-async function sendDTMF(sessionId, dtmf) {
-  await delay(60);
-  return { 
-    success: true, 
-    sessionId, 
-    action: 'sendDTMF', 
-    dtmf, 
-    message: `Mock: Received DTMF '${dtmf}' for ${sessionId}`
-  };
-}
-
-async function getBalance(sessionId) {
-  await delay(50);
-  return { success: true, sessionId, message: `Your account balance is ₹500.` };
-}
-
-async function recharge(sessionId, amount = 100) {
-  await delay(50);
-  return { success: true, sessionId, message: `Recharge successful for ₹${amount}.` };
-}
-
-async function reportLostCard(sessionId) {
-  await delay(70);
-  return {
-    success: true,
-    sessionId,
-    message: `Thank you. Your card has been blocked immediately. A customer service agent will call you shortly to confirm.`
-  };
-}
-
-async function activateNewCard(sessionId) {
-  await delay(70);
-  return {
-    success: true,
-    sessionId,
-    message: `To activate your new card, please enter the 16-digit card number followed by the hash key.`
-  };
-}
-
-async function updateContactDetails(sessionId) {
-  await delay(70);
-  return {
-    success: true,
-    sessionId,
-    message: `A secure link to update your contact details has been sent to your registered mobile number.`
-  };
-}
-
-async function reportSuspiciousTransaction(sessionId) {
-  await delay(70);
-  return {
-    success: true,
-    sessionId,
-    message: `Thank you for reporting this. A temporary hold has been placed on your account. Our fraud protection team will contact you within the next hour.`
-  };
-}
-
-async function handleQuery(sessionId, queryOrIntent) {
-  if (!queryOrIntent) {
+/**
+ * Dispatches an already-detected intent.
+ *
+ * Takes the intent rather than the raw query on purpose. The previous version
+ * re-ran its own keyword matching over the query, duplicating detectIntent and
+ * requiring the two matchers to stay in sync by hand — they drifted, and
+ * lost-card queries were detected and then rejected here as unmappable.
+ * intentHandler already knows the intent, so it simply passes it along.
+ */
+async function handleQuery(sessionId, intent, params) {
+  if (!intent) {
     return { success: false, sessionId, error: { message: "Query or intent is required." } };
   }
 
-  const q = queryOrIntent.toString().toLowerCase();
+  const result = await callAcs(intent, sessionId, params);
+  if (result.success === false) return result;
 
-  // First: check if it's an explicit intent string
-  switch (queryOrIntent) {
-    case "ACS_BALANCE": {
-      const r = await getBalance(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-    case "ACS_RECHARGE": {
-      const r = await recharge(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-    case "ACS_REPORT_LOST_CARD": {
-      const r = await reportLostCard(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-    case "ACS_ACTIVATE_CARD": {
-      const r = await activateNewCard(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-    case "ACS_UPDATE_CONTACT": {
-      const r = await updateContactDetails(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-    case "ACS_REPORT_SUSPICIOUS": {
-      const r = await reportSuspiciousTransaction(sessionId);
-      return { success: true, sessionId, data: { message: r.message } };
-    }
-  }
-
-  // Fallback: free-text matching (for robustness)
-  if (q.includes("balance")) {
-    const r = await getBalance(sessionId);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  if (q.includes("recharge")) {
-    const amountMatch = q.match(/(\d+)/);
-    const amount = amountMatch ? Number(amountMatch[1]) : 100;
-    const r = await recharge(sessionId, amount);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  // Must stay in sync with detectIntent() in handlers/intentHandler.js — if this
-  // is narrower, a query routed here as ACS_REPORT_LOST_CARD falls through to the
-  // "Unable to map" error instead of being handled.
-  if (/lost\s+(\w+\s+){0,3}card/.test(q) ||
-      q.includes("report lost") ||
-      q.includes("block card") ||
-      q.includes("block it")) {
-    const r = await reportLostCard(sessionId);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  if (q.includes("activate") && q.includes("card")) {
-    const r = await activateNewCard(sessionId);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  if (q.includes("update contact") || q.includes("change contact") || q.includes("update mobile")) {
-    const r = await updateContactDetails(sessionId);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  if (q.includes("suspicious") || q.includes("fraud") || q.includes("transaction")) {
-    const r = await reportSuspiciousTransaction(sessionId);
-    return { success: r.success, sessionId, data: { message: r.message } };
-  }
-
-  return {
-    success: false,
-    sessionId,
-    error: { message: "Unable to map query to ACS action." }
-  };
+  // Shape intentHandler expects.
+  return { success: true, sessionId, data: { message: result.responseText }, source: result.source };
 }
 
-module.exports = { 
+const startCall = (sessionId) => callAcs('ACS_START_CALL', sessionId);
+const stopCall = (sessionId) => callAcs('ACS_STOP_CALL', sessionId);
+const sendDTMF = (sessionId, digit) => callAcs('ACS_SEND_DTMF', sessionId, { digit });
+const getBalance = (sessionId) => callAcs('ACS_BALANCE', sessionId);
+const recharge = (sessionId, amount) => callAcs('ACS_RECHARGE', sessionId, { amount });
+const reportLostCard = (sessionId) => callAcs('ACS_REPORT_LOST_CARD', sessionId);
+const activateNewCard = (sessionId) => callAcs('ACS_ACTIVATE_CARD', sessionId);
+const updateContactDetails = (sessionId) => callAcs('ACS_UPDATE_CONTACT', sessionId);
+const reportSuspiciousTransaction = (sessionId) => callAcs('ACS_REPORT_SUSPICIOUS', sessionId);
+
+module.exports = {
+  callAcs,
   startCall,
   stopCall,
   sendDTMF,
