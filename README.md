@@ -169,6 +169,10 @@ response rather than a matched intent.
 ### ACS
 
 All three take a `sessionId`; `/acs/sendDTMF` also takes a `digit` string.
+They are answered by the ACS service when `ACS_API_URL` is set, and by the
+built-in mock text below when it is not. The response shape is the same either
+way; only the values differ (a real `callId`, for instance, instead of the
+`mocked-call-123` placeholder).
 
 | Endpoint | Body | Response `data` |
 | --- | --- | --- |

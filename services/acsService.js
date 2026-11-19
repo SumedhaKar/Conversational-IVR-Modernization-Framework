@@ -20,14 +20,23 @@ const FALLBACK_TEXT = {
     "A secure link to update your contact details has been sent to your registered mobile number.",
   ACS_REPORT_SUSPICIOUS:
     "Thank you for reporting this. A temporary hold has been placed on your account. Our fraud protection team will contact you within the next hour.",
-  ACS_START_CALL: "Call started successfully (mocked).",
-  ACS_STOP_CALL: "Call stopped successfully (mocked).",
-  ACS_SEND_DTMF: "DTMF received (mocked)."
+  // Functions where the documented response embeds request values, so the
+  // /acs/* routes return exactly what the README specifies when ACS is unset.
+  ACS_START_CALL: (sessionId) => `Call started successfully (mocked) for ${sessionId}`,
+  ACS_STOP_CALL: (sessionId) => `Call stopped successfully (mocked) for ${sessionId}`,
+  ACS_SEND_DTMF: (sessionId, params = {}) =>
+    `DTMF '${params.digit ?? ''}' sent successfully (mocked) for ${sessionId}`
 };
 
-const fallback = (intent, sessionId, reason) => {
+const fallback = (intent, sessionId, reason, params) => {
   logger.info(`ACS ${intent} served from mock for session ${sessionId} (${reason})`);
-  return { sessionId, intent, responseText: FALLBACK_TEXT[intent], source: 'mock' };
+  const text = FALLBACK_TEXT[intent];
+  return {
+    sessionId,
+    intent,
+    responseText: typeof text === 'function' ? text(sessionId, params) : text,
+    source: 'mock'
+  };
 };
 
 /**
@@ -45,8 +54,8 @@ async function callAcs(intent, sessionId, params) {
     return { sessionId, intent, success: false, error: { message: "Unable to map query to ACS action." } };
   }
 
-  if (config.USE_ACS_MOCK) return fallback(intent, sessionId, 'USE_ACS_MOCK is set');
-  if (!config.acsApiUrl) return fallback(intent, sessionId, 'no ACS_API_URL configured');
+  if (config.USE_ACS_MOCK) return fallback(intent, sessionId, 'USE_ACS_MOCK is set', params);
+  if (!config.acsApiUrl) return fallback(intent, sessionId, 'no ACS_API_URL configured', params);
 
   try {
     const response = await axios.post(
@@ -57,7 +66,7 @@ async function callAcs(intent, sessionId, params) {
 
     const body = response.data;
     if (!body || !body.responseText) {
-      return fallback(intent, sessionId, 'ACS returned no responseText');
+      return fallback(intent, sessionId, 'ACS returned no responseText', params);
     }
 
     logger.info(`ACS ${intent} answered for session ${sessionId}`);
@@ -65,7 +74,7 @@ async function callAcs(intent, sessionId, params) {
   } catch (error) {
     const detail = error.response ? `HTTP ${error.response.status}` : error.code || error.message;
     logger.warn(`ACS ${intent} failed for session ${sessionId}: ${detail}`);
-    return fallback(intent, sessionId, detail);
+    return fallback(intent, sessionId, detail, params);
   }
 }
 

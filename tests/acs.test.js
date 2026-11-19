@@ -164,6 +164,76 @@ describe('middleware calls ACS over HTTP', () => {
   });
 });
 
+describe('the /acs/* routes go through acsService', () => {
+  const PORT = 3996;
+  const acsPost = (port, route, body) =>
+    fetch(`http://localhost:${port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+  before(() => startMiddleware(PORT, { ACS_API_URL: ACS_URL }));
+
+  // These three previously built their responses inline in acsController and
+  // never reached acsService, so they stayed mocked even with ACS configured.
+  test('call control is answered by the service', async () => {
+    const start = await (await acsPost(PORT, '/acs/start', { sessionId: 'route-a' })).json();
+    assert.equal(start.data.sessionId, 'route-a');
+    assert.match(start.data.message, /Call started successfully/);
+    assert.notEqual(start.data.callId, 'mocked-call-123', 'still returning the inline placeholder');
+
+    const stop = await (await acsPost(PORT, '/acs/stop', { sessionId: 'route-a' })).json();
+    assert.match(stop.data.message, /Call stopped successfully/);
+
+    const dtmf = await (await acsPost(PORT, '/acs/sendDTMF', { sessionId: 'route-a', digit: '7' })).json();
+    assert.equal(dtmf.data.digit, '7');
+    assert.match(dtmf.data.message, /7/);
+  });
+
+  test('call ids vary by session rather than being a constant', async () => {
+    const a = await (await acsPost(PORT, '/acs/start', { sessionId: 'route-a' })).json();
+    const b = await (await acsPost(PORT, '/acs/start', { sessionId: 'route-b' })).json();
+    assert.notEqual(a.data.callId, b.data.callId);
+  });
+
+  test('Joi validation still rejects missing fields', async () => {
+    assert.equal((await acsPost(PORT, '/acs/start', {})).status, 400);
+    assert.equal((await acsPost(PORT, '/acs/sendDTMF', { sessionId: 's1' })).status, 400);
+  });
+});
+
+describe('the /acs/* routes keep their documented shape without ACS', () => {
+  const PORT = 3997;
+  before(() => startMiddleware(PORT));
+
+  // The response shape is documented in the README and exercised by the
+  // Postman collections, so routing it through the service must not change it.
+  test('returns exactly the documented fields and text', async () => {
+    const res = await fetch(`http://localhost:${PORT}/acs/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's1' })
+    });
+    const body = await res.json();
+    assert.deepEqual(body.data, {
+      success: true,
+      sessionId: 's1',
+      callId: 'mocked-call-123',
+      message: 'Call started successfully (mocked) for s1'
+    });
+
+    const dtmf = await (
+      await fetch(`http://localhost:${PORT}/acs/sendDTMF`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 's1', digit: '1' })
+      })
+    ).json();
+    assert.equal(dtmf.data.message, "DTMF '1' sent successfully (mocked) for s1");
+  });
+});
+
 describe('middleware degrades gracefully when ACS misbehaves', () => {
   const PORT = 3993;
   before(() => startMiddleware(PORT, { ACS_API_URL: 'http://127.0.0.1:9/acs/intent' }));
