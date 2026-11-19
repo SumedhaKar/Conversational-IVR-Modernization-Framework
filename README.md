@@ -56,9 +56,12 @@ middleware-project/
 │   └── styles.css
 ├── docs/
 │   └── API.md              # API documentation
+├── bap-service/
+│   └── server.js           # Standalone downstream BAP service
 ├── tests/
 │   ├── unit.test.js        # Intent, language and config tests
-│   └── api.test.js         # HTTP integration tests
+│   ├── api.test.js         # HTTP integration tests
+│   └── bap.test.js         # BAP service + integration/resilience tests
 ├── .env.example            # Every setting, with defaults
 └── *.postman_collection.json # Manual exploration collections
 ```
@@ -271,9 +274,63 @@ configuration is never overridden by a stray local file.
 | `NODE_ENV` | `development` | `production` tightens the CORS default (see below). |
 | `LOG_LEVEL` | `info` | Winston log level. |
 | `LOG_FILE` | `./logs/middleware.log` | Log file path. |
-| `BAP_API_URL` | unset | Real BAP endpoint. Unset means mock responses. |
+| `BAP_API_URL` | unset | BAP endpoint. Unset means mock responses. |
 | `USE_BAP_MOCK` | `false` | Set to `true` to force mocks even when `BAP_API_URL` is set. |
+| `BAP_TIMEOUT_MS` | `5000` | How long to wait for BAP before falling back to mocks. |
 | `CORS_ORIGINS` | unset | Comma-separated origins allowed to call the API cross-origin. |
+
+The BAP service reads two of its own: `BAP_PORT` (default `4001`) and
+`BAP_LATENCY_MS` (default `0`, for exercising the middleware's timeout path).
+
+### BAP service
+
+`bap-service/` is a separate Express process representing the downstream
+banking platform. The middleware reaches it over HTTP, so the integration is a
+real network call rather than an in-process stub.
+
+```bash
+npm run bap     # terminal 1 — BAP service on :4001
+npm start       # terminal 2 — middleware on :3000
+```
+
+With `BAP_API_URL=http://localhost:4001/bap/intent` set, balance, mini
+statement, bill payment, loan details, e-statement and agent handoff are all
+answered by BAP. Without it, the middleware falls back to built-in mock text,
+so the app still runs standalone.
+
+#### Contract
+
+`POST /bap/intent`
+
+```json
+// request
+{ "sessionId": "sess-1099", "intent": "GetBalance", "params": {} }
+
+// 200
+{
+  "sessionId": "sess-1099",
+  "intent": "GetBalance",
+  "responseText": "Your account balance is ₹5,055.55.",
+  "data": { "accountNumber": "XXXX5055", "balance": 5055.55, "currency": "INR" }
+}
+```
+
+Intents: `GetBalance`, `GetMiniStatement`, `PayUtilityBill`, `GetLoanDetails`,
+`RequestEStatement`, `AgentConnect`. A missing `sessionId` or `intent` returns
+`400 invalid_request`; an unrecognised intent returns `404 unknown_intent`
+along with the supported list. `GET /health` reports status and intents.
+
+Account figures are derived from the `sessionId`, so different callers see
+different balances while a single session stays consistent — a constant would
+be indistinguishable from the hardcoded strings this replaced.
+
+#### Failure handling
+
+Every BAP call falls back to mock text rather than propagating an error: a
+caller losing their balance enquiry to a downstream outage is worse than a
+synthetic answer. Unreachable host, timeout, non-2xx and a 2xx with no
+`responseText` are all treated as failures and logged. Responses carry a
+`source` field of `bap` or `mock` saying which path produced them.
 
 ### CORS
 
